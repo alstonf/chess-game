@@ -3,7 +3,7 @@ import { Chess } from 'chess.js'
 import { Chessboard } from 'react-chessboard'
 
 export default function App(){
-  const [wsUrl, setWsUrl] = useState('wss://your-render-app.onrender.com');
+  const [wsUrl, setWsUrl] = useState('wss://chess-game-fzz0.onrender.com');
   const [roomId, setRoomId] = useState('room1');
   const [name, setName] = useState('Player');
   const socketRef = useRef(null);
