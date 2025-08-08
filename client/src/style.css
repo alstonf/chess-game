@@ -1,0 +1,14 @@
+
+:root{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+.app{max-width:900px;margin:24px auto;padding:16px}
+.board{display:grid;grid-template-columns:repeat(8,48px);gap:0;border:2px solid #222}
+.square{width:48px;height:48px;display:flex;align-items:center;justify-content:center;font-size:24px;user-select:none}
+.square.light{background:#f0d9b5}
+.square.dark{background:#b58863}
+.controls{margin:12px 0}
+.status{margin-top:8px}
+
+.controls input{padding:6px;margin-right:8px}
+.controls button{padding:6px}
+
+.header{display:flex;gap:12px;align-items:center}
