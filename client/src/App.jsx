@@ -1,160 +1,105 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Chess } from 'chess.js'
 import { Chessboard } from 'react-chessboard'
+import { io } from 'socket.io-client'
 
 export default function App(){
-  const [wsUrl, setWsUrl] = useState('wss://chess-game-fzz0.onrender.com');
+  const [serverUrl, setServerUrl] = useState('wss://chess-game-fzz0.onrender.com');
   const [roomId, setRoomId] = useState('room1');
   const [name, setName] = useState('Player');
+  const [desiredTime, setDesiredTime] = useState(300); // seconds
   const socketRef = useRef(null);
-  const [connected, setConnected] = useState(false);
-  const [color, setColor] = useState('white');
-  const [fen, setFen] = useState(new Chess().fen());
   const chessRef = useRef(new Chess());
-  const [log, setLog] = useState([]);
+  const [fen, setFen] = useState(new Chess().fen());
+  const [color, setColor] = useState('white');
+  const [connected, setConnected] = useState(false);
   const [moves, setMoves] = useState([]);
   const [chat, setChat] = useState([]);
-  const [chatText, setChatText] = useState('');
-  const [opponentName, setOpponentName] = useState('Waiting...');
+  const [timers, setTimers] = useState({ white: 300, black: 300 });
   const [turn, setTurn] = useState('white');
-  const reconnectTimerRef = useRef(null);
+  const [status, setStatus] = useState('idle');
 
   useEffect(()=>{ chessRef.current = new Chess(fen); }, [fen]);
 
-  // connect handler with auto-retry
   function connect(){
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
-    const ws = new WebSocket(wsUrl);
-    socketRef.current = ws;
+    if (socketRef.current) socketRef.current.disconnect();
+    const socket = io(serverUrl, { transports: ['websocket'], reconnectionAttempts: 5 });
+    socketRef.current = socket;
 
-    ws.onopen = () => {
-      setConnected(true);
-      addLog('Connected');
-      // join room
-      ws.send(JSON.stringify({ type: 'join', room: roomId, name }));
-    };
+    socket.on('connect', () => { setConnected(true); setStatus('connected');
+      socket.emit('join', { roomId, name, desiredTime });
+    });
 
-    ws.onmessage = (ev) => {
-      const data = JSON.parse(ev.data);
-      if (data.type === 'joined'){
-        setColor(data.color);
-        setFen(data.fen);
-        addLog(`Joined as ${data.color}`);
-      }
-      if (data.type === 'waiting') addLog(data.message);
-      if (data.type === 'start'){
-        setFen(data.fen);
-        setMoves([]);
-        setLog(l => [...l, 'Game started']);
-        // set opponent name
-        const names = data.names || [];
-        if (names.length === 2){
-          const opp = names.find(n => n !== name) || 'Opponent';
-          setOpponentName(opp);
-        }
-      }
-      if (data.type === 'move'){
-        setFen(data.fen);
-        setMoves(m => [...m, data.move.san]);
-        setTurn(data.turn);
-        addLog(`Move: ${data.move.san}`);
-      }
-      if (data.type === 'invalid') addLog('Illegal move');
-      if (data.type === 'gameover') addLog('Game over: ' + data.reason);
-      if (data.type === 'chat') setChat(c => [...c, data.message]);
-      if (data.type === 'peer-left') addLog('Opponent left');
-      if (data.type === 'resign') addLog('Resigned — winner: ' + data.winner);
-      if (data.type === 'rematch'){
-        setFen(data.fen);
-        setMoves([]);
-        addLog('Rematch started');
-      }
-    };
+    socket.on('joined', ({ color: c, fen: f, timers: t }) => { setColor(c); setFen(f); setTimers(t); setStatus('joined'); });
+    socket.on('waiting', (msg) => setStatus(msg));
+    socket.on('start', ({ fen: f, timers: t, turn: tr }) => { setFen(f); setTimers(t); setTurn(tr); setMoves([]); setStatus('playing'); });
+    socket.on('move', ({ move, fen: f, turn: tr, timers: t }) => { setFen(f); setMoves(m => [...m, move.san]); setTurn(tr); setTimers(t); });
+    socket.on('timers', ({ timers: t, turn: tr }) => { setTimers(t); setTurn(tr); });
+    socket.on('timeouts', ({ winner }) => { setStatus('timeout'); alert('Time over — winner: ' + winner); });
+    socket.on('gameover', ({ reason }) => { setStatus('gameover'); alert('Game over: ' + reason); });
+    socket.on('chat', (msg) => setChat(c => [...c, msg]));
+    socket.on('peer-left', () => setStatus('opponent-left'));
+    socket.on('resign', ({ winner }) => { setStatus('resigned'); alert('Resign — winner: ' + winner); });
+    socket.on('rematch', ({ fen: f, timers: t }) => { setFen(f); setTimers(t); setMoves([]); setStatus('rematch'); });
 
-    ws.onclose = () => {
-      setConnected(false);
-      addLog('Disconnected — will retry');
-      // auto-reconnect with exponential backoff
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = setTimeout(() => connect(), 3000);
-    };
-
-    ws.onerror = () => addLog('Connection error');
+    socket.on('disconnect', () => { setConnected(false); setStatus('disconnected'); });
   }
 
-  useEffect(()=>{
-    // cleanup
-    return ()=>{
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (socketRef.current) socketRef.current.close();
+  function onPieceDrop(from, to){
+    // local validation
+    const chess = new Chess(chessRef.current.fen());
+    const legal = chess.move({ from, to, promotion: 'q' });
+    if (!legal) return false;
+    // rollback
+    chess.undo();
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('move', { from, to, promotion: 'q' });
+    } else {
+      alert('Not connected');
     }
-  },[]);
-
-  function addLog(t){ setLog(l => [...l, `${new Date().toLocaleTimeString()}: ${t}`]); }
-
-  function onPieceDrop(sourceSquare, targetSquare){
-    // create move and send to server
-    const move = { from: sourceSquare, to: targetSquare, promotion: 'q' };
-    try {
-      // optimistic local validation
-      const chess = new Chess(chessRef.current.fen());
-      const legal = chess.move(move);
-      if (!legal) { addLog('Illegal move'); return false; }
-      // rollback optimistic move
-      // send to server
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: 'move', move }));
-      } else {
-        addLog('Not connected');
-      }
-      return true;
-    } catch (e) { addLog('Move error'); return false; }
+    return true;
   }
 
-  function sendChat(){
-    if (!chatText.trim()) return;
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN){
-      socketRef.current.send(JSON.stringify({ type: 'chat', text: chatText }));
-      setChatText('');
-    } else addLog('Not connected');
-  }
+  function sendChat(text){ if (!text) return; socketRef.current.emit('chat', { text }); }
+  function resign(){ socketRef.current.emit('resign'); }
+  function rematch(){ socketRef.current.emit('rematch'); }
 
-  function resign(){ if (socketRef.current) socketRef.current.send(JSON.stringify({ type: 'resign' })); }
-  function offerDraw(){ if (socketRef.current) socketRef.current.send(JSON.stringify({ type: 'offer_draw' })); }
-  function acceptDraw(){ if (socketRef.current) socketRef.current.send(JSON.stringify({ type: 'accept_draw' })); }
-  function rematch(){ if (socketRef.current) socketRef.current.send(JSON.stringify({ type: 'rematch' })); }
+  function formatTime(s){ const m = Math.floor(s/60); const sec = s % 60; return `${m}:${sec.toString().padStart(2,'0')}` }
 
   return (
     <div className="app">
       <div className="header">
-        <h2>Online Chess — Improved</h2>
-        <div style={{marginLeft:'auto'}}>
-          <strong>Status:</strong> {connected ? 'Connected' : 'Disconnected'} — You are <strong>{color}</strong>
-        </div>
+        <h2>Online Chess — Stable</h2>
+        <div style={{marginLeft:'auto'}}>{connected ? 'Connected' : 'Disconnected'} — {status}</div>
       </div>
 
       <div className="controls">
-        <input value={wsUrl} onChange={e=>setWsUrl(e.target.value)} style={{width:360,padding:8}} />
+        <input value={serverUrl} onChange={e=>setServerUrl(e.target.value)} placeholder="https://your-render-app.onrender.com" />
         <input value={roomId} onChange={e=>setRoomId(e.target.value)} placeholder="room id" />
-        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" />
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="your name" />
+        <input type="number" value={desiredTime} onChange={e=>setDesiredTime(Number(e.target.value))} style={{width:120}} />
         <button className="btn" onClick={connect}>Connect / Join</button>
-        <button className="btn small" onClick={resign}>Resign</button>
-        <button className="btn small" onClick={offerDraw}>Offer Draw</button>
-        <button className="btn small" onClick={rematch}>Rematch</button>
+        <button className="btn" onClick={resign}>Resign</button>
+        <button className="btn" onClick={rematch}>Rematch</button>
       </div>
 
       <div className="container">
         <div className="left panel">
+          <div className="timer">
+            <div>White: <span className="time">{formatTime(timers.white)}</span></div>
+            <div>Black: <span className="time">{formatTime(timers.black)}</span></div>
+          </div>
+
           <Chessboard
             id="PlayBoard"
             position={fen}
-            onPieceDrop={(s,t) => onPieceDrop(s,t)}
+            onPieceDrop={(from,to)=>onPieceDrop(from,to)}
             boardOrientation={color === 'black' ? 'black' : 'white'}
-            boardWidth={600}
+            boardWidth={Math.min(640, window.innerWidth - 60)}
             arePiecesDraggable={true}
-            customBoardStyle={{ borderRadius: '8px', boxShadow: '0 4px 12px rgba(16,24,40,0.08)' }}
           />
-          <div className="statusline">Turn: {turn} | Opponent: {opponentName}</div>
+
+          <div style={{marginTop:8}}>Turn: {turn}</div>
         </div>
 
         <div className="right">
@@ -167,19 +112,11 @@ export default function App(){
 
           <div className="panel" style={{marginTop:12}}>
             <h4>Chat</h4>
-            <div className="log">
+            <div style={{maxHeight:200,overflow:'auto'}}>
               {chat.map((c,i)=>(<div key={i}><strong>{c.sender}:</strong> {c.text}</div>))}
             </div>
             <div className="chat-input">
-              <input value={chatText} onChange={e=>setChatText(e.target.value)} placeholder="Say hello" />
-              <button className="btn" onClick={sendChat}>Send</button>
-            </div>
-          </div>
-
-          <div className="panel" style={{marginTop:12}}>
-            <h4>Logs</h4>
-            <div className="log">
-              {log.map((l,i)=>(<div key={i}>{l}</div>))}
+              <input placeholder="Say hello" onKeyDown={(e)=>{ if(e.key==='Enter'){ sendChat(e.target.value); e.target.value=''; } }} />
             </div>
           </div>
         </div>
