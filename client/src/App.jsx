@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import { Chess } from 'chess.js'
 
 export default function App(){
-  const [wsUrl, setWsUrl] = useState('ws://localhost:3001');
+  const [wsUrl, setWsUrl] = useState('wss://chess-game-fzz0.onrender.com');
   const [roomId, setRoomId] = useState('room1');
   const [name, setName] = useState('Player');
   const [conn, setConn] = useState(null);
