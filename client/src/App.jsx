@@ -4,7 +4,7 @@ import { Chessboard } from 'react-chessboard'
 import { io } from 'socket.io-client'
 
 export default function App(){
-  const [serverUrl, setServerUrl] = useState('wss://chess-game-fzz0.onrender.com');
+  const [serverUrl, setServerUrl] = useState('https://chess-game-fzz0.onrender.com');
   const [roomId, setRoomId] = useState('room1');
   const [name, setName] = useState('Player');
   const [desiredTime, setDesiredTime] = useState(300); // seconds
